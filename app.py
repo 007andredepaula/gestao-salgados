@@ -84,10 +84,25 @@ if perfil == "Administrador":
     with tab1:
         st.subheader("Gerar Link de Acesso Único")
         loja_alvo = st.number_input("ID da Loja", min_value=1, max_value=10, step=1)
+        # Substitua o trecho do botão "Gerar Novo Link" por este:
         if st.button("Gerar Novo Link"):
             token = secrets.token_urlsafe(16)
-            # Salvar token no banco (Lógica de uso único)
-            st.success(f"Envie este link ao Gerente: `https://seu-sistema.streamlit.app/?token={token}`")
+            # Salvar no banco (Certifique-se que a tabela existe)
+            conn = criar_conexao()
+            cursor = conn.cursor()
+            data_expiracao = datetime.now() + timedelta(hours=24)
+            cursor.execute("INSERT INTO tokens_acesso (token, loja_id, status, expiracao) VALUES (?, ?, 'pendente', ?)", 
+                           (token, loja_alvo, 'pendente', data_expiracao))
+            conn.commit()
+            conn.close()
+            
+            # LINK DINÂMICO: Ele pega o endereço atual do navegador automaticamente
+            url_atual = "https://sistema-gestao.streamlit.app" 
+            link_final = f"{url_atual}/?token={token}"
+            
+            st.success(f"Link Gerado com Sucesso!")
+            st.code(link_final) # Exibe o link em uma caixa fácil de copiar
+            st.info("Envie o link acima para o gerente. Ele expira em 24h e só funciona uma vez.")
             
         st.divider()
         st.subheader("Aprovações Pendentes")
