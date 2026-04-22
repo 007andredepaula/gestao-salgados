@@ -7,11 +7,10 @@ from datetime import datetime, timedelta
 import urllib.parse
 
 # --- CONFIGURAÇÃO ---
-st.set_page_config(page_title="Sistema de Gestão Multicidades", layout="wide")
+st.set_page_config(page_title="Sistema de Gestão Integrada", layout="wide")
 ADMIN_USER = "admin"
 ADMIN_PASS = "salgados2026" 
 
-# --- BANCO DE DADOS ---
 def criar_conexao():
     return sqlite3.connect('gestao_integrada.db', check_same_thread=False)
 
@@ -31,11 +30,12 @@ def get_device_id(): return str(uuid.getnode())
 
 def verificar_acesso():
     conn = criar_conexao(); cursor = conn.cursor()
+    # Busca o status exato do aparelho atual
     cursor.execute("SELECT aprovado, loja_id, nivel, cidade FROM dispositivos_autorizados WHERE device_id = ?", (get_device_id(),))
     res = cursor.fetchone(); conn.close()
-    return res # (aprovado, loja_id, nivel, cidade)
+    return res 
 
-# --- CAPTURA DE TOKEN (O que o funcionário usa) ---
+# --- CAPTURA DE TOKEN ---
 qp = st.query_params
 if "token" in qp:
     token_val = qp["token"]
@@ -43,58 +43,71 @@ if "token" in qp:
     cursor.execute("SELECT loja_id, nivel, cidade FROM tokens_acesso WHERE token = ? AND status = 'pendente'", (token_val,))
     res = cursor.fetchone()
     if res:
-        # Registra o aparelho mas deixa APROVADO = 0 (esperando o admin)
         cursor.execute("INSERT OR REPLACE INTO dispositivos_autorizados VALUES (?, ?, ?, ?, 0)", (get_device_id(), res[0], res[1], res[2]))
         cursor.execute("UPDATE tokens_acesso SET status = 'utilizado' WHERE token = ?", (token_val,))
         conn.commit()
-        st.success("✅ Solicitação enviada! Peça ao Administrador para aprovar este aparelho.")
+        st.success("✅ Solicitação enviada! Aguarde a aprovação do Administrador.")
+        st.info("Após o Admin aprovar, esta página irá carregar automaticamente.")
     conn.close()
 
-# --- INTERFACE ---
+# --- LOGICA DE NAVEGAÇÃO ---
 acesso = verificar_acesso()
-st.sidebar.title("🥨 Gestão Integrada")
+st.sidebar.title("🥨 Gestão de Fábrica")
 
-# Definir o que aparece no menu lateral
+# Se o aparelho não existe ou não está aprovado
 if not acesso or acesso[0] == 0:
     perfil_selecionado = st.sidebar.selectbox("Acesso", ["Aguardando Liberação", "Login Administrador"])
+    if acesso and acesso[0] == 0:
+        st.sidebar.warning("⏳ Aguardando Aprovação...")
 else:
-    status, loja_id, nivel, cidade_user = acesso
+    status, loja_id_atual, nivel_user, cidade_user = acesso
     st.sidebar.success(f"Dispositivo Autorizado")
-    st.sidebar.info(f"📍 {cidade_user} | {nivel}")
+    st.sidebar.info(f"📍 {cidade_user} | {nivel_user}")
     
-    if nivel == "Funcionário": 
+    # Trava de segurança: Funcionário não vê opção de Admin
+    if nivel_user == "Funcionário":
         perfil_selecionado = "Funcionário"
-    elif nivel == "Gerente": 
+    elif nivel_user == "Gerente":
         perfil_selecionado = st.sidebar.selectbox("Menu", ["Gerente", "Funcionário"])
-    elif nivel == "Fábrica": 
-        perfil_selecionado = "Fábrica"
-    else: 
+    else: # Admin
         perfil_selecionado = st.sidebar.selectbox("Menu", ["Administrador", "Fábrica", "Gerente", "Funcionário"])
 
-# --- TELA ADMINISTRADOR ---
-if perfil_selecionado == "Login Administrador" or perfil_selecionado == "Administrador":
+# --- TELAS ---
+
+if perfil_selecionado == "Aguardando Liberação":
+    st.title("⏳ Verificação de Segurança")
+    st.write("Este dispositivo está aguardando liberação do Administrador Geral.")
+    if st.button("🔄 Verificar se fui aprovado"):
+        st.rerun()
+
+elif perfil_selecionado == "Login Administrador" or perfil_selecionado == "Administrador":
     if 'auth' not in st.session_state: st.session_state['auth'] = False
-    
     if not st.session_state['auth']:
-        st.title("🔐 Acesso Reservado")
-        u = st.text_input("Usuário")
-        p = st.text_input("Senha", type="password")
-        if st.button("Acessar Painel"):
+        u = st.text_input("Usuário"); p = st.text_input("Senha", type="password")
+        if st.button("Entrar"):
             if u == ADMIN_USER and p == ADMIN_PASS:
-                st.session_state['auth'] = True
-                st.rerun()
-            else: st.error("Incorreto")
+                st.session_state['auth'] = True; st.rerun()
         st.stop()
 
-    st.title("🏛️ Painel do Administrador Geral")
-    t1, t2, t3 = st.tabs(["Segurança e Aprovações", "Fábrica e Lojas", "Relatórios"])
+    st.title("🏛️ Painel do Administrador")
+    t1, t2 = st.tabs(["Aprovações e Links", "Relatórios"])
     
     with t1:
-        st.subheader("1. Gerar Link de Convite")
-        c1, c2, c3 = st.columns(3)
-        l_id = c1.number_input("ID Loja", 1, 50, 1)
-        cid = c2.selectbox("Cidade", ["Guarapari", "Vitoria", "Vila Velha"])
-        niv = c3.selectbox("Nível", ["Funcionário", "Gerente", "Fábrica"])
+        st.subheader("Novas Solicitações")
+        conn = criar_conexao(); cursor = conn.cursor()
+        pendentes = pd.read_sql_query("SELECT * FROM dispositivos_autorizados WHERE aprovado = 0", conn)
+        for _, r in pendentes.iterrows():
+            if st.button(f"✅ Autorizar: {r['nivel']} - Loja {r['loja_id']} ({r['cidade']})"):
+                cursor.execute("UPDATE dispositivos_autorizados SET aprovado = 1 WHERE device_id = ?", (r['device_id'],))
+                conn.commit(); conn.close(); st.rerun()
+        conn.close()
+        
+        st.divider()
+        st.subheader("Gerar Convite")
+        # (Campos de gerar link...)
+        l_id = st.number_input("ID Loja", 1, 10, 1)
+        cid = st.selectbox("Cidade", ["Guarapari", "Vitoria"])
+        niv = st.selectbox("Nível", ["Funcionário", "Gerente", "Fábrica"])
         if st.button("Gerar Link"):
             tk = secrets.token_urlsafe(16)
             conn = criar_conexao(); cursor = conn.cursor()
@@ -102,30 +115,22 @@ if perfil_selecionado == "Login Administrador" or perfil_selecionado == "Adminis
             conn.commit(); conn.close()
             st.code(f"https://sistema-gestao.streamlit.app/?token={tk}")
 
-        st.divider()
-        st.subheader("2. Aprovações Pendentes")
-        conn = criar_conexao(); cursor = conn.cursor()
-        pendentes = pd.read_sql_query("SELECT device_id, nivel, loja_id, cidade FROM dispositivos_autorizados WHERE aprovado = 0", conn)
-        if not pendentes.empty:
-            for _, r in pendentes.iterrows():
-                col_inf, col_btn = st.columns([3, 1])
-                col_inf.warning(f"SOLICITAÇÃO: {r['nivel']} | Loja {r['loja_id']} ({r['cidade']})")
-                if col_btn.button("✅ ACEITAR", key=r['device_id']):
-                    cursor.execute("UPDATE dispositivos_autorizados SET aprovado = 1 WHERE device_id = ?", (r['device_id'],))
-                    conn.commit()
-                    st.rerun()
-        else: st.info("Nenhuma solicitação no momento.")
-        conn.close()
-
-# --- DEMAIS TELAS (RESUMIDAS) ---
-elif perfil_selecionado == "Aguardando Liberação":
-    st.title("⏳ Verificação em Andamento")
-    st.info("Este aparelho enviou uma solicitação. Aguarde o Administrador aceitar no painel principal.")
-
 elif perfil_selecionado == "Funcionário":
-    st.title(f"🛒 Balcão - Loja {loja_id} ({cidade_user})")
-    st.write("Área de vendas pronta para uso.")
+    st.title(f"🛒 Balcão de Vendas - Loja {loja_id_atual}")
+    st.subheader(f"Unidade: {cidade_user}")
+    
+    # FORMULÁRIO DE VENDA REAL
+    with st.form("venda_form"):
+        prod = st.selectbox("Produto", ["Cento de Coxinha", "Cento de Kibe", "Combo Festa"])
+        qtd = st.number_input("Quantidade", 1, 100, 1)
+        valor = st.number_input("Valor Total R$", 0.0, 1000.0, 60.0)
+        if st.form_submit_button("Finalizar Venda"):
+            conn = criar_conexao(); cursor = conn.cursor()
+            cursor.execute("INSERT INTO vendas (loja_id, cidade, produto, valor, quantidade, data) VALUES (?, ?, ?, ?, ?, ?)",
+                           (loja_id_atual, cidade_user, prod, valor, qtd, datetime.now()))
+            conn.commit(); conn.close()
+            st.success("Venda salva com sucesso!")
 
 elif perfil_selecionado == "Fábrica":
-    st.title(f"🏭 Produção - {cidade_user}")
-    st.write("Área de envio de estoque pronta.")
+    st.title(f"🏭 Produção Regional - {cidade_user}")
+    st.write("Painel para envio de mercadorias.")
