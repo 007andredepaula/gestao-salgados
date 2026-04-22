@@ -26,95 +26,90 @@ def inicializar_banco():
 inicializar_banco()
 def get_device_id(): return str(uuid.getnode())
 
-def verificar_acesso():
-    conn = criar_conexao(); cursor = conn.cursor()
-    cursor.execute("SELECT aprovado, loja_id, nivel, cidade FROM dispositivos_autorizados WHERE device_id = ?", (get_device_id(),))
-    res = cursor.fetchone(); conn.close()
-    return res 
+# --- LÓGICA DE PERMISSÕES ---
+acesso_db = None
+conn = criar_conexao(); cursor = conn.cursor()
+cursor.execute("SELECT aprovado, loja_id, nivel, cidade FROM dispositivos_autorizados WHERE device_id = ?", (get_device_id(),))
+acesso_db = cursor.fetchone()
+conn.close()
 
-# --- LÓGICA DE ACESSO ---
-acesso = verificar_acesso()
+# Inicializa sessão de autenticação
+if 'is_admin' not in st.session_state:
+    st.session_state['is_admin'] = False
+
+# --- BARRA LATERAL ---
 st.sidebar.title("🥨 Gestão de Fábrica")
 
-# 1. BLOQUEIO TOTAL PARA LOJAS
-# Se o dispositivo for de Funcionário ou Gerente, ele NÃO PODE escolher ser Admin
-if acesso and acesso[0] == 1:
-    status, loja_id_atual, nivel_user, cidade_user = acesso
-    st.sidebar.success(f"Dispositivo Autorizado")
-    st.sidebar.info(f"📍 {cidade_user}")
+# Se você já logou como Admin, ou se o dispositivo é Admin
+if st.session_state['is_admin']:
+    perfil_selecionado = st.sidebar.selectbox("Painel Geral", ["Administrador", "Fábrica", "Gerente", "Funcionário"])
     
-    if nivel_user == "Funcionário":
-        perfil_selecionado = "Funcionário"
-        st.sidebar.write("📌 Perfil: Caixa")
-    elif nivel_user == "Gerente":
-        perfil_selecionado = st.sidebar.selectbox("Ir para:", ["Gerente", "Funcionário"])
-    elif nivel_user == "Fábrica":
-        perfil_selecionado = "Fábrica"
-    else: # Perfil de Administrador (apenas nos seus computadores)
-        perfil_selecionado = st.sidebar.selectbox("Painel Geral", ["Administrador", "Fábrica", "Gerente", "Funcionário"])
+    # ORGANIZAÇÃO DE GUARAPARI NA LATERAL PARA O ADMIN
+    with st.sidebar.expander("🌍 Estrutura Guarapari", expanded=True):
+        st.subheader("📍 Unidade Guarapari")
+        st.write("🏭 **Fábrica Principal**")
+        st.write("📂 **Gerências:** Loja 01, Loja 02")
+        st.write("🛒 **Caixas:** Balcão 01, Balcão 02")
+        
+elif acesso_db and acesso_db[0] == 1:
+    # DISPOSITIVO DE LOJA: Bloqueado, não pode mudar perfil
+    status, loja_id_atual, nivel_user, cidade_user = acesso_db
+    st.sidebar.success("✅ Dispositivo Autorizado")
+    st.sidebar.info(f"📍 {cidade_user} | {nivel_user}")
+    perfil_selecionado = nivel_user # Trava o perfil conforme o banco
 else:
-    perfil_selecionado = st.sidebar.selectbox("Acesso", ["Aguardando Liberação", "Login Administrador"])
+    perfil_selecionado = st.sidebar.selectbox("Acesso", ["Login Administrador", "Aguardando Liberação"])
 
-# --- ÁREA DO ADMINISTRADOR (CENTRAL DE COMANDO) ---
+# --- TELAS ---
+
 if perfil_selecionado == "Administrador" or perfil_selecionado == "Login Administrador":
-    if 'auth' not in st.session_state: st.session_state['auth'] = False
-    if not st.session_state['auth']:
-        st.title("🔐 Login do Administrador")
+    if not st.session_state['is_admin']:
+        st.title("🔐 Acesso Administrativo")
         u = st.text_input("Usuário"); p = st.text_input("Senha", type="password")
-        if st.button("Entrar"):
-            if u == ADMIN_USER and p == ADMIN_PASS: st.session_state['auth'] = True; st.rerun()
+        if st.button("Entrar no Painel"):
+            if u == ADMIN_USER and p == ADMIN_PASS:
+                st.session_state['is_admin'] = True
+                st.rerun()
+            else: st.error("Acesso Negado")
         st.stop()
 
     st.title("🏛️ Painel do Administrador Geral")
+    t1, t2, t3 = st.tabs(["Segurança e Aprovações", "Gestão de Guarapari", "Financeiro"])
     
-    # ORGANIZAÇÃO POR CIDADE NA LATERAL DO ADMIN
-    with st.sidebar.expander("🌍 Estrutura Guarapari", expanded=True):
-        st.write("🏭 Fábrica Guarapari")
-        st.write("👥 Gerentes: Loja 1, Loja 2")
-        st.write("🛒 Caixas: Balcão 01, Balcão 02")
-
-    tab1, tab2, tab3 = st.tabs(["Aprovações e Segurança", "Gestão de Lojas", "Relatórios Financeiros"])
-    
-    with tab1:
-        st.subheader("Gerar Novos Acessos")
-        c1, c2, c3 = st.columns(3)
-        nova_loja = c1.number_input("ID Loja", 1, 10, 1)
-        nova_cid = c2.selectbox("Cidade", ["Guarapari", "Vitoria"])
-        novo_niv = c3.selectbox("Tipo de Link", ["Funcionário", "Gerente", "Fábrica"])
-        if st.button("Gerar Link"):
+    with t1:
+        st.subheader("Gerar Link para Novo Computador")
+        col = st.columns(3)
+        l_id = col[0].number_input("ID Loja", 1, 10, 1)
+        cid = col[1].selectbox("Cidade", ["Guarapari", "Vitória"])
+        niv = col[2].selectbox("Nível do Link", ["Funcionário", "Gerente", "Fábrica"])
+        if st.button("Gerar Novo Link"):
             tk = secrets.token_urlsafe(16)
-            conn = criar_conexao(); cursor = conn.cursor()
-            cursor.execute("INSERT INTO tokens_acesso VALUES (?, ?, ?, ?, 'pendente', ?)", (tk, nova_loja, novo_niv, nova_cid, datetime.now()+timedelta(hours=24)))
-            conn.commit(); conn.close()
+            c = criar_conexao(); cur = c.cursor()
+            cur.execute("INSERT INTO tokens_acesso VALUES (?, ?, ?, ?, 'pendente', ?)", (tk, l_id, niv, cid, datetime.now()+timedelta(hours=24)))
+            c.commit(); c.close()
             st.code(f"https://sistema-gestao.streamlit.app/?token={tk}")
 
         st.divider()
         st.subheader("Aprovações Pendentes")
-        conn = criar_conexao(); cursor = conn.cursor()
-        pendentes = pd.read_sql_query("SELECT * FROM dispositivos_autorizados WHERE aprovado = 0", conn)
+        c = criar_conexao(); cur = c.cursor()
+        pendentes = pd.read_sql_query("SELECT * FROM dispositivos_autorizados WHERE aprovado = 0", c)
         for _, r in pendentes.iterrows():
-            if st.button(f"✅ Aprovar {r['nivel']} - Loja {r['loja_id']} ({r['cidade']})"):
-                cursor.execute("UPDATE dispositivos_autorizados SET aprovado = 1 WHERE device_id = ?", (r['device_id'],))
-                conn.commit(); conn.close(); st.rerun()
-        conn.close()
+            if st.button(f"✅ Autorizar {r['nivel']} (Loja {r['loja_id']})"):
+                cur.execute("UPDATE dispositivos_autorizados SET aprovado = 1 WHERE device_id = ?", (r['device_id'],))
+                c.commit(); c.close(); st.rerun()
+        c.close()
 
-# --- ÁREA DO FUNCIONÁRIO (TOTALMENTE RESTRITA) ---
 elif perfil_selecionado == "Funcionário":
-    st.title(f"🛒 Balcão de Vendas - Loja {loja_id_atual}")
-    st.info(f"Unidade: {cidade_user} | Dispositivo: {get_device_id()[:8]}")
-    
+    st.title(f"🛒 Balcão - Loja {acesso_db[1]}")
+    st.write(f"Unidade: {acesso_db[3]}")
+    # Tela simples de venda para o caixa
     with st.form("venda"):
-        prod = st.selectbox("Salgado", ["Cento de Coxinha", "Cento de Kibe"])
-        qtd = st.number_input("Quantidade", 1, 100, 1)
-        if st.form_submit_button("Confirmar Venda"):
-            st.success("Venda enviada para o administrador!")
-
-# --- ÁREA DA FÁBRICA ---
-elif perfil_selecionado == "Fábrica":
-    st.title(f"🏭 Produção - {cidade_user}")
-    st.write("Gerencie o envio de salgados para as lojas da sua região.")
+        st.selectbox("Salgado", ["Cento de Coxinha", "Cento de Kibe"])
+        st.number_input("Qtd", 1)
+        if st.form_submit_button("Lançar Venda"):
+            st.success("Venda registrada!")
 
 elif perfil_selecionado == "Aguardando Liberação":
-    st.title("⏳ Verificação Pendente")
-    st.warning("Seu dispositivo ainda não foi aprovado pelo administrador.")
-    if st.button("🔄 Atualizar Status"): st.rerun()
+    st.title("⏳ Verificação de Dispositivo")
+    st.warning("Peça ao Administrador para aprovar este computador no painel principal.")
+    if st.button("🔄 Já fui aprovado"): st.rerun()
